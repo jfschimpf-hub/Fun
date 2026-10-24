@@ -45,6 +45,7 @@
   button:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; }
   .hint { margin: 2.5em 0 .75em; font-size: 1rem; }
   #game { display: block; width: min(100%, 320px); height: auto; aspect-ratio: 2 / 3; border-radius: 16px; border: 3px solid var(--ink); background: #9ddf9b; touch-action: none; cursor: pointer; }
+  .mute { margin-top: 1em; font-size: .95rem; }
   @media (prefers-reduced-motion: reduce) { button:hover { transform: none; } }
 </style>
 </head>
@@ -60,6 +61,7 @@
   <button id="again" type="button">Say it again</button>
   <p class="hint">Bored? Tap the box to flap. Don’t hit the pipes.</p>
   <canvas id="game" aria-label="Flappy bird game. Tap or press space to flap."></canvas>
+  <button id="mute" class="mute" type="button">🔊 Music on</button>
 </main>
 <script>
   const greetings = [
@@ -82,10 +84,79 @@
     let bird, pipes, score, frame, state = "ready", overAt = 0, best = 0;
     try { best = +localStorage.getItem("sarahFlappyBest") || 0; } catch (e) {}
 
+    // ---- silly background music (starts on first tap, browsers require a tap) ----
+    let ac = null, master = null, musicOn = true, step = 0, nextT = 0;
+    const TEMPO = 0.18;
+    const hz = n => 440 * Math.pow(2, (n - 69) / 12);
+    const MEL = [
+      [72, 0, 76, 72, 79, 0, 79, 0, 77, 76, 74, 72, 74, 0, 67, 0],
+      [72, 0, 76, 72, 79, 0, 84, 0, 83, 81, 79, 77, 76, 0, 72, 0]
+    ];
+    const BASS = [
+      [48, 0, 55, 0, 48, 0, 55, 0, 53, 0, 60, 0, 55, 0, 62, 0],
+      [48, 0, 55, 0, 52, 0, 59, 0, 53, 0, 60, 0, 55, 0, 48, 0]
+    ];
+    function tone(type, f, t, d, vol, bend) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(f * (bend || 1), t);
+      if (bend) o.frequency.exponentialRampToValueAtTime(f, t + 0.04);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.02);
+    }
+    function boing(t) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(200, t);
+      o.frequency.exponentialRampToValueAtTime(900, t + 0.25);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.15, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.32);
+    }
+    function schedule() {
+      while (nextT < ac.currentTime + 0.3) {
+        const bar = Math.floor(step / 16) % 2, s = step % 16;
+        const m = MEL[bar][s], b = BASS[bar][s];
+        if (m) tone("square", hz(m), nextT, TEMPO * 0.9, 0.07, 0.94);
+        if (b) tone("triangle", hz(b), nextT, TEMPO * 1.6, 0.22);
+        if (bar === 1 && s === 15) boing(nextT);
+        nextT += TEMPO; step++;
+      }
+    }
+    function startMusic() {
+      if (!ac) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        ac = new AC();
+        master = ac.createGain();
+        master.gain.value = musicOn ? 0.6 : 0;
+        master.connect(ac.destination);
+        nextT = ac.currentTime + 0.05;
+        setInterval(schedule, 100);
+      }
+      if (ac.state === "suspended") ac.resume();
+    }
+    const muteBtn = document.getElementById("mute");
+    muteBtn.addEventListener("click", () => {
+      musicOn = !musicOn;
+      muteBtn.textContent = musicOn ? "🔊 Music on" : "🔇 Music off";
+      if (master) master.gain.value = musicOn ? 0.6 : 0;
+      if (musicOn) startMusic();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!ac) return;
+      if (document.hidden) ac.suspend();
+      else if (musicOn) ac.resume();
+    });
+
     function reset() { bird = { x: 80, y: H / 2, v: 0 }; pipes = []; score = 0; frame = 0; }
     reset();
 
     function flap() {
+      startMusic();
       if (state === "over") {
         if (performance.now() - overAt < 400) return;
         reset(); state = "ready"; return;
